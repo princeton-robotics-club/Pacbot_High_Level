@@ -59,10 +59,46 @@ class Ghost:
 
 
 class GhostPredict:
-    def __init__(self, test) -> None:
+    def __init__(self, test, debug) -> None:
         self.test = test
         self.ghost_names = ("r", "o", "p", "b")
         self.ghosts = [Ghost(ghost_init_dict[ghost]) for ghost in self.ghost_names]
+        self.prev_pac_pos = (14, 7)
+        self.was_frightened = False
+        self.move_counter = 0
+        self.prev_move = UP
+        self.debug = debug
+
+    def dPrint(self, message):
+        if self.debug:
+            print(message)
+
+    def step(self, state):
+        if state["life_lost"]:
+            self.move_counter = 0
+            self.reset()
+            self.prev_pac_pos = (14, 7)
+            self.was_frightened = False
+
+        if not self.was_frightened:
+            self.was_frightened = (
+                state["rf"] or state["bf"] or state["of"] or state["pf"]
+            )
+
+        if state["r"] != self.ghosts[0].curr:
+            self.dPrint("calced")
+            self.dPrint(state["r"])
+            self.dPrint(self.ghosts[0].curr)
+            self.dPrint(state["pac"])
+            self.update(
+                state,
+                self.move_counter,
+                self.prev_move,
+                self.prev_pac_pos,
+                self.was_frightened,
+            )
+            self.move_counter += 1
+        self.prev_pac_pos = state["pac"]
 
     def update(self, state, move_counter, prev_move, pac_pos, was_frightened):
         red_pos = state["r"]
@@ -97,15 +133,14 @@ class HighLevelPolicy(Policy):
         debug=True,
         nearby_threshold: int = 2,
         test=False,
+        ghost_tracker=None,
     ) -> None:
         super().__init__(debug)
         self.heuristic = heuristic
         self.NT = nearby_threshold
-        self.prev_move = UP
-        self.move_counter = 0
-        self.ghost_tracker = GhostPredict(test)
-        self.prev_pac_pos = (14, 7)
-        self.was_frightened = False
+        self.ghost_tracker = (
+            ghost_tracker if ghost_tracker else GhostPredict(test, debug)
+        )
 
     # helper method to astar to a ghost, which is technically a barrier in maze
     def astar_ghost(self, maze, start, end, next_move, state=None):
@@ -123,15 +158,34 @@ class HighLevelPolicy(Policy):
         movement = tuple(np.subtract(path[1], path[0]))
         for index, action in enumerate(self.ACTIONS):
             if action == movement:
-                self.prev_move = index
-                return index
+                self.ghost_tracker.prev_move = index
+                move_dist = 1
+                for i in range(2, len(path)):
+                    if (
+                        tuple(np.subtract(path[i].position, path[i - 1].position))
+                        == action
+                    ):
+                        move_dist += 1
+                    else:
+                        # Makes pacbot not stop at intersection
+                        # does not account for cases where the destination is the intersection
+                        move_dist -= 1
+                        break
+                return (index, move_dist)
         # assume that a turn happened
         if len(path) < 3:
             return STAY
         movement = tuple(np.subtract(path[2], path[1]))
         for index, action in enumerate(self.ACTIONS):
             if action == movement:
-                return index + 4
+                move_dist = 1
+                for i in range(3, len(path)):
+                    if (
+                        tuple(np.subtract(path[i].position, path[i - 1].position))
+                        == action
+                    ):
+                        move_dist += 1
+                return (index, move_dist)
         self.dPrint("ERROR: DOUBLE TURN")
         return STAY
 
@@ -152,31 +206,7 @@ class HighLevelPolicy(Policy):
     #    life_lost:     bool
     def get_action(self, state):
 
-        if state["life_lost"]:
-            self.move_counter = 0
-            self.ghost_tracker.reset()
-            self.prev_pac_pos = (14, 7)
-            self.was_frightened = False
-
-        if not self.was_frightened:
-            self.was_frightened = (
-                state["rf"] or state["bf"] or state["of"] or state["pf"]
-            )
-
-        if state["r"] != self.ghost_tracker.ghosts[0].curr:
-            self.dPrint("calced")
-            self.dPrint(state["r"])
-            self.dPrint(self.ghost_tracker.ghosts[0].curr)
-            self.dPrint(state["pac"])
-            self.ghost_tracker.update(
-                state,
-                self.move_counter,
-                self.prev_move,
-                self.prev_pac_pos,
-                self.was_frightened,
-            )
-            self.move_counter += 1
-        self.prev_pac_pos = state["pac"]
+        self.ghost_tracker.step(state)
 
         obstacles = self.WALLS.copy()
 
